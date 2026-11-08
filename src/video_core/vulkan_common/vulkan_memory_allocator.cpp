@@ -74,12 +74,16 @@ namespace {
         return {};
     }
 
-    [[nodiscard]] VmaMemoryUsage MemoryUsageVma(MemoryUsage usage) {
+    [[nodiscard]] VmaMemoryUsage MemoryUsageVma(MemoryUsage usage, const Device& device) {
         switch (usage) {
             case MemoryUsage::DeviceLocal:
             case MemoryUsage::Stream:
                 return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             case MemoryUsage::Upload:
+                if (device.PrefersDeviceLocalUploads()) {
+                    return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                }
+                return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             case MemoryUsage::Download:
                 return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         }
@@ -409,7 +413,7 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
         ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0;
     const VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | MemoryUsageVmaFlags(usage),
-        .usage = MemoryUsageVma(usage),
+        .usage = MemoryUsageVma(usage, device),
         .requiredFlags = 0,
         .preferredFlags = MemoryUsagePreferredVmaFlags(usage) | anv_flags,
         .memoryTypeBits = usage == MemoryUsage::Stream ? 0u : valid_memory_types,
@@ -467,7 +471,7 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
     }
     const VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | MemoryUsageVmaFlags(usage),
-        .usage = MemoryUsageVma(usage),
+        .usage = MemoryUsageVma(usage, device),
         .requiredFlags = 0,
         .preferredFlags = MemoryUsagePreferredVmaFlags(usage) | anv_flags,
         .memoryTypeBits = memory_type_bits,
@@ -503,7 +507,7 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
 
 MemoryCommit MemoryAllocator::Commit(const VkMemoryRequirements &reqs, MemoryUsage usage)
 {
-    const auto vma_usage = MemoryUsageVma(usage);
+    const auto vma_usage = MemoryUsageVma(usage, device);
     VmaAllocationCreateInfo ci{};
     ci.flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | MemoryUsageVmaFlags(usage);
     ci.usage = vma_usage;
@@ -536,7 +540,7 @@ MemoryCommit MemoryAllocator::Commit(const VkMemoryRequirements &reqs, MemoryUsa
 
 MemoryCommit MemoryAllocator::Commit(const vk::Buffer &buffer, MemoryUsage usage) {
     // Allocate memory appropriate for this buffer automatically
-    const auto vma_usage = MemoryUsageVma(usage);
+    const auto vma_usage = MemoryUsageVma(usage, device);
 
     VmaAllocationCreateInfo ci{};
     ci.flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | MemoryUsageVmaFlags(usage);

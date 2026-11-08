@@ -365,6 +365,18 @@ public:
         return false;
     }
 
+    /// CPU staging uploads into ReBAR VRAM on discrete RADV. EDEN_NX2_UPLOAD_DEVICE=0/1 overrides.
+    bool PrefersDeviceLocalUploads() const {
+        static const char forced = [] {
+            const char* value = std::getenv("EDEN_NX2_UPLOAD_DEVICE");
+            return value == nullptr ? '\0' : value[0];
+        }();
+        if (forced == '0' || forced == '1') {
+            return forced == '1';
+        }
+        return IsRadv() && !IsIntegrated() && HasHostVisibleDeviceLocal();
+    }
+
     bool IsSparseBindingSupported() const {
         return features.features.sparseBinding && graphics_family_sparse_binding;
     }
