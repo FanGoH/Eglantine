@@ -1990,12 +1990,21 @@ void RasterizerVulkan::FlushWork() {
 #else
     // Every 32 draws (was 8): each dispatch woke the worker thread, and Switch 2 titles make
     // ~55,000 draws a second. A full chunk is dispatched on its own (Scheduler::Record).
+    // RADV: 128 draws matches EDEN_NX2_FLUSH_DRAWS (native 128) so the GPU thread is not
+    // woken 4x more often than submits.
     static constexpr u32 DRAWS_TO_DISPATCH = 4096;
     static constexpr u32 CHECK_MASK = 31;
+    static constexpr u32 RADV_CHECK_MASK = 127;
 #endif // __ANDROID__
 
     static_assert(DRAWS_TO_DISPATCH % (CHECK_MASK + 1) == 0);
-    if ((++draw_counter & CHECK_MASK) != 0) {
+#ifndef __ANDROID__
+    static_assert(DRAWS_TO_DISPATCH % (RADV_CHECK_MASK + 1) == 0);
+    const u32 check_mask = device.IsRadv() ? RADV_CHECK_MASK : CHECK_MASK;
+#else
+    const u32 check_mask = CHECK_MASK;
+#endif
+    if ((++draw_counter & check_mask) != 0) {
         return;
     }
     // Keep the host GPU working while native commands are still being recorded.
