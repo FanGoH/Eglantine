@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <limits>
 #include <vector>
 
@@ -41,17 +42,32 @@ VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats)
     return found != formats.end() ? *found : formats[0];
 }
 
+static bool PreferUnlockedPresent(const Device& device) {
+    static const char forced = [] {
+        const char* value = std::getenv("EDEN_NX2_PRESENT_UNLOCKED");
+        return value == nullptr ? '\0' : value[0];
+    }();
+    if (forced == '0') {
+        return false;
+    }
+    if (forced == '1') {
+        return true;
+    }
+    // Plasma/KWin already vsyncs; FIFO here double-caps discrete RADV.
+    return device.IsRadv() && !device.IsIntegrated();
+}
+
 static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
-                                              bool has_fifo_relaxed) {
+                                              bool has_fifo_relaxed, bool prefer_unlocked) {
     // Mailbox doesn't lock the application like FIFO (vsync)
     // FIFO present mode locks the framerate to the monitor's refresh rate
-    Settings::VSyncMode setting = [has_imm, has_mailbox]() {
+    Settings::VSyncMode setting = [has_imm, has_mailbox, prefer_unlocked]() {
         // Choose Mailbox or Immediate if unlocked and those modes are supported
         const auto mode = Settings::values.vsync_mode.GetValue();
         if (Settings::values.frame_gen.GetValue()) {
             return mode == Settings::VSyncMode::FifoRelaxed ? mode : Settings::VSyncMode::Fifo;
         }
-        if (Settings::values.use_speed_limit.GetValue() &&
+        if (!prefer_unlocked && Settings::values.use_speed_limit.GetValue() &&
             Settings::values.current_speed_mode.GetValue() != Settings::SpeedMode::Turbo) {
             return mode;
         }
@@ -275,7 +291,8 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
 
     const VkCompositeAlphaFlagBitsKHR alpha_flags{ChooseAlphaFlags(capabilities)};
     surface_format = ChooseSwapSurfaceFormat(formats);
-    present_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed);
+    present_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed,
+                                         PreferUnlockedPresent(device));
 
     u32 requested_image_count{capabilities.minImageCount + 1};
     // Ensure Triple buffering if possible.
@@ -378,7 +395,8 @@ void Swapchain::Destroy() {
 }
 
 bool Swapchain::NeedsPresentModeUpdate() const {
-    const auto requested_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed);
+    const auto requested_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed,
+                                                      PreferUnlockedPresent(device));
     return present_mode != requested_mode;
 }
 
