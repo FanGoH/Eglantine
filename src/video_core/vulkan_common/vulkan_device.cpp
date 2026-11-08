@@ -1012,6 +1012,20 @@ void Device::SaveShader(std::span<const u32> spirv) const {
 }
 
 bool Device::ComputeIsOptimalAstcSupported() const {
+    // Desktop RADV has no ASTC hardware. This 9060 XT reports
+    // textureCompressionASTC_LDR=false; if a future Mesa advertises the bit, still
+    // transcode instead of sampling a software decode as "optimal".
+    if (IsRadv() && !IsIntegrated()) {
+        if (!features.features.textureCompressionASTC_LDR) {
+            LOG_INFO(Render_Vulkan,
+                     "RADV discrete GPU has no ASTC LDR hardware; keeping CPU/GPU transcode");
+        } else {
+            LOG_WARNING(Render_Vulkan,
+                        "RADV advertised textureCompressionASTC_LDR on {}; treating as software",
+                        GetModelName());
+        }
+        return false;
+    }
     static constexpr std::array<VkFormat, 28> astc_formats = {
         VK_FORMAT_ASTC_4x4_UNORM_BLOCK,   VK_FORMAT_ASTC_4x4_SRGB_BLOCK,
         VK_FORMAT_ASTC_5x4_UNORM_BLOCK,   VK_FORMAT_ASTC_5x4_SRGB_BLOCK,
