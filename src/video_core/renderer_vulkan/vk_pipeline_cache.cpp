@@ -513,8 +513,13 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
             driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
             device.GetDriverVersion() < VK_MAKE_VERSION(512, 672, 0),
         .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
+        // RADV fragment subgroup shuffle has the same NaN/helper-lane issues as
+        // AMD's proprietary driver (Lichii 68caa6c / EGLANTINE_AMD_FRAGMENT_SHUFFLE).
+        // CasLoop expected-from-CAS and depth-compare integer texture typing are
+        // already on by default (EnvGate).
         .has_broken_spirv_fragment_shuffle =
-            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY &&
+            (driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+             driver_id == VK_DRIVER_ID_MESA_RADV) &&
             Common::EnvGate("EGLANTINE_AMD_FRAGMENT_SHUFFLE"),
         .max_subgroup_size = device.GetMaxSubgroupSize(),
         .has_broken_robust =
