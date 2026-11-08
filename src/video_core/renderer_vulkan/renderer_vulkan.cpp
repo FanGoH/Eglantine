@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -187,7 +188,16 @@ try
 #endif
 {
 
-    if (Settings::values.renderer_force_max_clock.GetValue() && device.ShouldBoostClocks()) {
+    static const char turbo_forced = [] {
+        const char* value = std::getenv("EDEN_NX2_TURBO");
+        return value == nullptr ? '\0' : value[0];
+    }();
+    const bool auto_turbo =
+        turbo_forced == '1' ||
+        (turbo_forced != '0' && device.IsRadv() && !device.IsIntegrated());
+    const bool keep_clocks =
+        Settings::values.renderer_force_max_clock.GetValue() || auto_turbo;
+    if (keep_clocks && device.ShouldBoostClocks()) {
         turbo_mode.emplace(instance, dld);
         scheduler.RegisterOnSubmit([this] { turbo_mode->QueueSubmitted(); });
     }
