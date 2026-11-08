@@ -338,6 +338,33 @@ public:
         return properties.driver.driverID;
     }
 
+    /// Mesa RADV (AMD on Linux).
+    bool IsRadv() const {
+        return GetDriverID() == VK_DRIVER_ID_MESA_RADV;
+    }
+
+    /// RADV GFX12 / RDNA4 (RX 9000). Device names look like "AMD Radeon RX 9060 XT (RADV GFX1200)".
+    bool IsRadvGfx12() const {
+        if (!IsRadv()) {
+            return false;
+        }
+        const std::string_view name{GetModelName()};
+        return name.find("GFX12") != std::string_view::npos;
+    }
+
+    /// HOST_VISIBLE | DEVICE_LOCAL (ReBAR / SAM). Discrete RADV has this on the VRAM heap.
+    bool HasHostVisibleDeviceLocal() const {
+        const auto memory_props = GetPhysical().GetMemoryProperties().memoryProperties;
+        for (u32 i = 0; i < memory_props.memoryTypeCount; ++i) {
+            const VkMemoryPropertyFlags flags = memory_props.memoryTypes[i].propertyFlags;
+            if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+                (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool IsSparseBindingSupported() const {
         return features.features.sparseBinding && graphics_family_sparse_binding;
     }

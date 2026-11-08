@@ -172,41 +172,11 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
     return bytes * info.resources.layers > (u64{1} << 30);
 }
 
-// A large image over Switch 2 sparse blocks nobody has written (title 1's terrain layer pools, 2.9
-// GB of R8/RG16/R16 that stay empty in the attract demo) is all zeros: it gets no device memory
-// until a write makes the texture cache replace it.
-[[nodiscard]] bool IsUnwrittenSparse(const Device& device, const ImageInfo& info, GPUVAddr gpu_addr) {
-    if (!device.CanUseUnbackedSparseImages()) {
-        return false;
-    }
-    constexpr u32 MinSize = 32U << 20;
-    const u32 size = VideoCommon::CalculateGuestSizeInBytes(info);
-    return size >= MinSize && info.type != ImageType::e1D && info.type != ImageType::Buffer &&
-           info.type != ImageType::Linear && Tegra::Nx2SparseUnwritten(gpu_addr, size);
-}
-
-// A large color array in a Switch 2 sparse region (title 1's terrain arrays: 13-26% of their
-// blocks written) gets memory by layer, as its layers are written: unbacked at first, then
-// Image::BindLayers. Only formats uploaded layer by layer: huge ASTC arrays (GPU decode) and
-// formats the host samples as they are.
-[[nodiscard]] bool UsesSparseLayers(const Device& device, const ImageInfo& info, GPUVAddr gpu_addr) {
-    if (!device.CanUseUnbackedSparseImages() || !device.IsSparseResidencyImage2DSupported() ||
-        info.type != ImageType::e2D ||
-        info.resources.layers <= 1 || info.num_samples != 1 ||
-        VideoCore::Surface::GetFormatType(info.format) != VideoCore::Surface::SurfaceType::ColorTexture) {
-        return false;
-    }
-    const bool layer_uploads =
-        IsHugeAstcArray(device, info) ||
-        (!IsPixelFormatASTC(info.format) &&
-         (!IsPixelFormatBCn(info.format) || device.IsOptimalBcnSupported()));
-    const u32 size = VideoCommon::CalculateGuestSizeInBytes(info);
-    return layer_uploads && size >= (32U << 20) && Tegra::Nx2InSparseRegion(gpu_addr, size);
-}
-
-// How SparseTiles images leave the blocks without data: unbound (reads give zero), or all bound to
-// one zeroed block where the driver can't sample unbound memory (AMD) but lets blocks share
-// memory. EDEN_NX2_SPARSE_ALIASED=1 takes the shared block wherever it is supported, =0 never.
+// How SparseTiles / SparseLayers images leave the blocks without data: unbound (reads give zero),
+// or all bound to one zeroed block where the driver can't sample unbound memory (AMD) but lets
+// blocks share memory. EDEN_NX2_SPARSE_ALIASED=1 takes the shared block wherever it is supported,
+// =0 never. RADV already returns Aliased from this (unbacked sparse hangs), but SparseLayers and
+// IsUnwrittenSparse used to require CanUseUnbackedSparseImages and so never took that path.
 enum class SparseTilesMode {
     None,
     Unbound,
@@ -229,6 +199,39 @@ enum class SparseTilesMode {
         return SparseTilesMode::Unbound;
     }
     return aliased ? SparseTilesMode::Aliased : SparseTilesMode::None;
+}
+
+// A large image over Switch 2 sparse blocks nobody has written (title 1's terrain layer pools, 2.9
+// GB of R8/RG16/R16 that stay empty in the attract demo) is all zeros: it gets no device memory
+// until a write makes the texture cache replace it. Aliased sparse (RADV) still qualifies: empty
+// tiles share one zeroed block instead of a full allocation.
+[[nodiscard]] bool IsUnwrittenSparse(const Device& device, const ImageInfo& info, GPUVAddr gpu_addr) {
+    if (SparseTilesModeOf(device) == SparseTilesMode::None) {
+        return false;
+    }
+    constexpr u32 MinSize = 32U << 20;
+    const u32 size = VideoCommon::CalculateGuestSizeInBytes(info);
+    return size >= MinSize && info.type != ImageType::e1D && info.type != ImageType::Buffer &&
+           info.type != ImageType::Linear && Tegra::Nx2SparseUnwritten(gpu_addr, size);
+}
+
+// A large color array in a Switch 2 sparse region (title 1's terrain arrays: 13-26% of their
+// blocks written) gets memory by layer, as its layers are written: unbacked at first, then
+// Image::BindLayers. Only formats uploaded layer by layer: huge ASTC arrays (GPU decode) and
+// formats the host samples as they are. Gated on SparseTilesMode so RADV uses Aliased layers.
+[[nodiscard]] bool UsesSparseLayers(const Device& device, const ImageInfo& info, GPUVAddr gpu_addr) {
+    if (SparseTilesModeOf(device) == SparseTilesMode::None ||
+        !device.IsSparseResidencyImage2DSupported() || info.type != ImageType::e2D ||
+        info.resources.layers <= 1 || info.num_samples != 1 ||
+        VideoCore::Surface::GetFormatType(info.format) != VideoCore::Surface::SurfaceType::ColorTexture) {
+        return false;
+    }
+    const bool layer_uploads =
+        IsHugeAstcArray(device, info) ||
+        (!IsPixelFormatASTC(info.format) &&
+         (!IsPixelFormatBCn(info.format) || device.IsOptimalBcnSupported()));
+    const u32 size = VideoCommon::CalculateGuestSizeInBytes(info);
+    return layer_uploads && size >= (32U << 20) && Tegra::Nx2InSparseRegion(gpu_addr, size);
 }
 
 // A large single 2D image in a Switch 2 sparse region (title 1's world-sized R8/RG16/R16 masks,
@@ -1213,6 +1216,11 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
       render_pass_cache{render_pass_cache_}, descriptor_pool{descriptor_pool_},
       compute_pass_descriptor_queue{compute_pass_descriptor_queue_},
       resolution{Settings::values.resolution_info} {
+    const auto sparse_tiles = SparseTilesModeOf(device);
+    LOG_INFO(Render_Vulkan, "Switch 2 sparse tiles: {}",
+             sparse_tiles == SparseTilesMode::Aliased   ? "aliased"
+             : sparse_tiles == SparseTilesMode::Unbound ? "unbound"
+                                                        : "disabled");
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
