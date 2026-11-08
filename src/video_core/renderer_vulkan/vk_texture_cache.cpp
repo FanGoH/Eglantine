@@ -330,6 +330,18 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
         return false;
     }
     if (IsHugeAstcArray(device, info)) {
+        // RADV GFX12's ASTC compute decoder has hung on the 8k virtual-texture arrays
+        // (title 1 / OoT). Keep the GPU path elsewhere; EDEN_NX2_HUGE_ASTC_GPU=1 forces it.
+        static const char force_gpu = [] {
+            const char* value = std::getenv("EDEN_NX2_HUGE_ASTC_GPU");
+            return value == nullptr ? '\0' : value[0];
+        }();
+        if (force_gpu == '1') {
+            return true;
+        }
+        if (device.IsRadvGfx12()) {
+            return false;
+        }
         return true;
     }
     if (Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu) {
@@ -359,7 +371,10 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
 // coordinates and derivative LOD still address it correctly; explicit LODs sample one level lower.
 [[nodiscard]] ImageInfo TrimmedHostInfo(const Device& device, const ImageInfo& info, u32& level_offset) {
     level_offset = 0;
-    if (!WillUseAcceleratedAstcDecode(device, info) || info.type != ImageType::e2D) {
+    // Trim huge ASTC arrays even when they stay on the CPU decoder (RADV GFX12), or the
+    // decoded RGBA8 copy is 24 GB.
+    if ((!WillUseAcceleratedAstcDecode(device, info) && !IsHugeAstcArray(device, info)) ||
+        info.type != ImageType::e2D) {
         return info;
     }
     const auto decoded_bytes = [&](u32 skip) {
@@ -1223,7 +1238,7 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
                                                         : "disabled");
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
-    // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
+    // Huge ASTC arrays decode on the GPU except RADV GFX12 (WillUseAcceleratedAstcDecode).
     if (Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu ||
         !device.IsOptimalAstcSupported()) {
         astc_decoder_pass.emplace(device, scheduler, descriptor_pool, staging_buffer_pool,
